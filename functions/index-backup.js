@@ -1,29 +1,35 @@
 const {onRequest} = require("firebase-functions/v2/https");
+const QRCode = require("qrcode");
+const PDFDocument = require("pdfkit");
+const {v4: uuidv4} = require("uuid");
+
+// Canvas functionality removed to avoid initialization timeout
+// PNG export will return a simple text response instead
 
 // Simple Hello World function
 exports.helloWorld = onRequest((request, response) => {
   response.send("Hello, Tafyaa!");
 });
 
-// QR Code generation function with lazy loading
+// QR Code generation function for family tree invitations
 exports.generateQR = onRequest(async (request, response) => {
   try {
-    // Lazy load dependencies to avoid initialization timeout
-    const QRCode = require("qrcode");
-    const {v4: uuidv4} = require("uuid");
-
-    // Use provided parameters or default values for testing
     const familyTreeId =
-      request.query.familyTreeId || request.body.familyTreeId ||
-      "demo-tree-123";
-    const role = request.query.role || request.body.role || "member";
-    const permission =
-      request.query.permission || request.body.permission || "read";
+      request.query.familyTreeId || request.body.familyTreeId;
+    const role = request.query.role || request.body.role;
+    const permission = request.query.permission || request.body.permission;
     const invitationLink =
       request.query.invitationLink || request.body.invitationLink || uuidv4();
     const expirationTime =
-      request.query.expirationTime || request.body.expirationTime ||
-      (Date.now() + 86400000); // 24 hours from now
+      request.query.expirationTime || request.body.expirationTime;
+
+    if (!familyTreeId || !role || !permission || !expirationTime) {
+      const errorMessage =
+        "Missing required parameters: familyTreeId, role, permission, " +
+        "expirationTime";
+      response.status(400).send(errorMessage);
+      return;
+    }
 
     const qrData = {
       familyTreeId,
@@ -55,40 +61,44 @@ exports.generateQR = onRequest(async (request, response) => {
     response.send(qrBuffer);
   } catch (error) {
     console.error("QR Code generation error:", error);
-    response.status(500).send("Error generating QR code: " + error.message);
+    response.status(500).send("Error generating QR code");
   }
 });
 
-// PDF export function with lazy loading
-exports.exportFamilyTreePDF = onRequest(async (request, response) => {
-  try {
-    // Lazy load dependencies
-    const PDFDocument = require("pdfkit");
-
-    const doc = new PDFDocument();
-    const sampleFamilyTree = {
-      name: "Jean Dupont",
-      birthYear: 1980,
-      spouse: "Marie Martin",
+// Family Tree data structure with images (arbre généalogique)
+const sampleFamilyTree = {
+  name: "Jean Dupont",
+  birthYear: 1980,
+  image: "https://example.com/images/jean.jpg", // URL to person's image
+  spouse: "Marie Martin",
+  spouseImage: "https://example.com/images/marie.jpg",
+  children: [
+    {
+      name: "Sophie Dupont",
+      birthYear: 2005,
+      image: "https://example.com/images/sophie.jpg",
+      spouse: "Pierre Leroy",
+      spouseImage: "https://example.com/images/pierre.jpg",
       children: [
         {
-          name: "Sophie Dupont",
-          birthYear: 2005,
-          spouse: "Pierre Leroy",
-          children: [
-            {
-              name: "Lucas Leroy",
-              birthYear: 2030,
-            },
-          ],
-        },
-        {
-          name: "Thomas Dupont",
-          birthYear: 2008,
+          name: "Lucas Leroy",
+          birthYear: 2030,
+          image: "https://example.com/images/lucas.jpg",
         },
       ],
-    };
+    },
+    {
+      name: "Thomas Dupont",
+      birthYear: 2008,
+      image: "https://example.com/images/thomas.jpg",
+    },
+  ],
+};
 
+// Export Family Tree as PDF with images
+exports.exportFamilyTreePDF = onRequest(async (request, response) => {
+  try {
+    const doc = new PDFDocument();
     const treeData = request.body.tree || sampleFamilyTree;
 
     // Set response headers
@@ -103,8 +113,8 @@ exports.exportFamilyTreePDF = onRequest(async (request, response) => {
     doc.fontSize(24).text("Arbre Généalogique", 100, 50);
     doc.fontSize(12);
 
-    // Simple tree drawing function
-    const drawTree = (person, x, y, depth = 0) => {
+    // Recursive function to draw family tree with images
+    const drawTree = async (person, x, y, depth = 0) => {
       const indent = depth * 120;
       const boxWidth = 100;
       const boxHeight = 120;
@@ -116,12 +126,23 @@ exports.exportFamilyTreePDF = onRequest(async (request, response) => {
       doc.text(person.name, x + indent + 5, y + 5);
       doc.text("Né(e) en: " + person.birthYear, x + indent + 5, y + 20);
 
+      // Placeholder for image (in real implementation, you'd fetch
+      // and embed the image)
+      doc.rect(x + indent + 10, y + 30, 80, 60);
+      doc.stroke();
+      doc.text("[Photo]", x + indent + 30, y + 60);
+
       // Draw spouse if exists
       if (person.spouse) {
         const spouseX = x + indent + boxWidth + 20;
         doc.rect(spouseX, y, boxWidth, boxHeight).stroke();
         doc.text(person.spouse, spouseX + 5, y + 5);
         doc.text("Conjoint(e)", spouseX + 5, y + 20);
+
+        // Spouse image placeholder
+        doc.rect(spouseX + 10, y + 30, 80, 60);
+        doc.stroke();
+        doc.text("[Photo]", spouseX + 30, y + 60);
 
         // Draw connecting line between spouses
         doc.moveTo(x + indent + boxWidth, y + boxHeight / 2);
@@ -138,48 +159,25 @@ exports.exportFamilyTreePDF = onRequest(async (request, response) => {
         doc.lineTo(childrenX, currentY - 10);
         doc.stroke();
 
-        // Draw children
-        person.children.forEach((child) => {
-          drawTree(child, x, currentY, depth + 1);
+        // Use for...of loop for async operations
+        for (const child of person.children) {
+          await drawTree(child, x, currentY, depth + 1);
           currentY += boxHeight + 50;
-        });
+        }
       }
     };
 
-    drawTree(treeData, 100, 100);
+    await drawTree(treeData, 100, 100);
     doc.end();
   } catch (error) {
     console.error("PDF export error:", error);
-    response.status(500).send("Error generating PDF: " + error.message);
+    response.status(500).send("Error generating PDF");
   }
 });
 
-// Text-based family tree export
+// Export Family Tree as PNG (simplified version without canvas)
 exports.exportFamilyTreePNG = onRequest(async (request, response) => {
   try {
-    const sampleFamilyTree = {
-      name: "Jean Dupont",
-      birthYear: 1980,
-      spouse: "Marie Martin",
-      children: [
-        {
-          name: "Sophie Dupont",
-          birthYear: 2005,
-          spouse: "Pierre Leroy",
-          children: [
-            {
-              name: "Lucas Leroy",
-              birthYear: 2030,
-            },
-          ],
-        },
-        {
-          name: "Thomas Dupont",
-          birthYear: 2008,
-        },
-      ],
-    };
-
     const treeData = request.body.tree || sampleFamilyTree;
 
     // Generate a simple text-based family tree representation
@@ -210,33 +208,6 @@ exports.exportFamilyTreePNG = onRequest(async (request, response) => {
     response.send(treeText);
   } catch (error) {
     console.error("Tree export error:", error);
-    response.status(500).send("Error generating family tree: " + error.message);
+    response.status(500).send("Error generating family tree");
   }
 });
-
-// Test function to show how to use generateQR
-exports.testQRParams = onRequest((request, response) => {
-  const baseUrl = `${request.protocol}://${request.get("host")}`;
-  const examples = {
-    message: "QR Code Generation Examples",
-    baseUrl: baseUrl,
-    examples: [
-      {
-        description: "Default QR Code (no parameters)",
-        url: `${baseUrl}/generateQR`,
-      },
-      {
-        description: "Custom QR Code with parameters",
-        url: `${baseUrl}/generateQR?familyTreeId=my-tree-456&role=admin&` +
-          `permission=write&expirationTime=${Date.now() + 86400000}`,
-      },
-      {
-        description: "QR Code for family member",
-        url: `${baseUrl}/generateQR?familyTreeId=dupont-family&role=member&` +
-          `permission=read&expirationTime=${Date.now() + 604800000}`,
-      },
-    ],
-  };
-  response.json(examples);
-});
-
